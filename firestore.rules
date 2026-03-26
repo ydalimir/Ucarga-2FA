@@ -1,0 +1,97 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper Functions
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+
+    function isTripCreator(trip) {
+      return isAuth() && request.auth.uid == trip.creatorId;
+    }
+    
+    function isTripCompany(tripId) {
+        return isAuth() && request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId;
+    }
+    
+    function isCarrier(userId) {
+        let userRole = get(/databases/$(database)/documents/users/$(userId)).data.role;
+        return userRole == 'transportista';
+    }
+
+
+    function isAssignedCarrier(trip) {
+      return isAuth() && request.auth.uid == trip.assignedCarrierId;
+    }
+
+    // User profiles can be read by any authenticated user.
+    // A user can create their own profile.
+    // A user can update their own profile fully, OR an authenticated user can update ONLY the rating fields or token balance.
+    match /users/{userId} {
+      allow read: if isAuth();
+      allow create: if isUser(userId);
+      allow update: if isUser(userId) || 
+                      (isAuth() && request.writeFields.hasOnly(['rating', 'ratingCount', 'tokenBalance']));
+    }
+
+    // Trips Collection
+    match /trips/{tripId} {
+      // Any authenticated user can read trip details.
+      allow read: if isAuth();
+      // A trip can only be created by an authenticated user, who is marked as the creator.
+      allow create: if isAuth() && request.resource.data.creatorId == request.auth.uid;
+      // The trip can be updated by its creator or the assigned carrier.
+      allow update: if isAuth() && (isTripCreator(resource.data) || isAssignedCarrier(resource.data));
+      // Only the trip creator can delete it.
+      allow delete: if isAuth() && isTripCreator(resource.data);
+
+      // Subcollection for bids on a trip
+      match /bids/{bidId} {
+        // Any authenticated user can read bids.
+        allow read: if isAuth();
+        // Any authenticated user (typically a carrier) can create a bid.
+        allow create: if isAuth() && isCarrier(request.auth.uid);
+        // Only the bid creator (carrier) or the trip creator (company) can update or delete a bid.
+        allow update, delete: if isAuth() && (request.auth.uid == resource.data.carrierId || isTripCreator(get(/databases/$(database)/documents/trips/$(tripId)).data));
+      }
+
+      // Subcollection for chat messages related to a trip
+      match /chats/{chatId}/messages/{messageId} {
+        // Only the trip creator and the assigned carrier can read/write messages.
+        // This rule is restrictive and assumes a chat is only between these two parties.
+        allow read, write: if isAuth() && (
+          isTripCreator(get(/databases/$(database)/documents/trips/$(tripId)).data) ||
+          isAssignedCarrier(get(/databases/$(database)/documents/trips/$(tripId)).data)
+        );
+      }
+    }
+    
+    // Ratings Collection
+    match /ratings/{ratingId} {
+        allow read: if isAuth();
+        // Only the company that created the trip can create a rating for it.
+        allow create: if isAuth() && isTripCompany(request.resource.data.tripId);
+        // Nobody can update or delete ratings to ensure integrity.
+        allow update, delete: if false;
+    }
+
+    // Collection Group query for 'bids'
+    // This allows a carrier to query for all their bids across all trips.
+    // It also allows a company to query for bids on trips they created.
+    match /{path=**}/bids/{bidId} {
+      allow read: if isAuth() && (
+        resource.data.carrierId == request.auth.uid || // Carrier can read their own bids
+        resource.data.creatorId == request.auth.uid    // Company can read bids for their trips
+      );
+    }
+  }
+}
+
+    

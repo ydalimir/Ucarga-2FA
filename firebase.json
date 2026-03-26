@@ -1,0 +1,13 @@
+
+{
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": {
+    "source": ".",
+    "site": "ucargamx",
+    "frameworksBackend": {
+      "region": "us-central1"
+    }
+  }
+}

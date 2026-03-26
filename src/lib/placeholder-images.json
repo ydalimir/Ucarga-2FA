@@ -1,0 +1,29 @@
+
+{
+  "placeholderImages": [
+    {
+      "id": "profile-avatar",
+      "description": "User profile avatar",
+      "imageUrl": "https://picsum.photos/seed/10/200/200",
+      "imageHint": "man portrait"
+    },
+    {
+      "id": "landing-hero",
+      "description": "Truck on a highway at sunset",
+      "imageUrl": "https://picsum.photos/seed/100/1920/1080",
+      "imageHint": "truck highway"
+    },
+    {
+      "id": "enterprise-section",
+      "description": "Laptop showing a logistics dashboard with trucks on a highway",
+      "imageUrl": "https://storage.googleapis.com/aifirebase-773dc.appspot.com/uber/f510a27e-851f-4d4a-9767-4a0b63c32e01.jpeg",
+      "imageHint": "logistics dashboard"
+    },
+    {
+      "id": "carrier-section",
+      "description": "Truck driver looking at a map",
+      "imageUrl": "https://ucarecdn.com/0b4f7aef-09b5-410f-b0a6-0f31b67553db/GeneratedImageSeptember1520251_44PM.png",
+      "imageHint": "truck driver phone"
+    }
+  ]
+}
