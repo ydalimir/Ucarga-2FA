@@ -133,6 +133,7 @@ function AuthPageContent() {
     }
     setIsLoading(true);
     try {
+      auth.languageCode = 'es'; // Forzar correo en español
       await sendPasswordResetEmail(auth, email);
       toast({ title: 'Correo enviado', description: 'Revisa tu bandeja de entrada o carpeta de spam para restablecer tu contraseña.' });
     } catch (error: any) {
@@ -291,6 +292,7 @@ function AuthPageContent() {
       await createUserData(user, role);
 
       // 3. Enviar correo de verificación antes de enrolar en 2FA
+      auth.languageCode = 'es'; // Forzar correo en español
       await sendEmailVerification(user);
       
       setIsLoading(false);
