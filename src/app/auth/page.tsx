@@ -1,12 +1,19 @@
-
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  sendEmailVerification,
   User,
+  getMultiFactorResolver,
+  PhoneAuthProvider,
+  PhoneMultiFactorGenerator,
+  multiFactor,
+  RecaptchaVerifier,
+  MultiFactorResolver
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
@@ -23,6 +30,13 @@ import Link from 'next/link';
 import { Textarea } from '@/components/ui/textarea';
 
 type UserRole = 'empresa' | 'transportista';
+type MfaStep = 'auth' | 'verifyLogin' | 'verifyEnroll';
+
+declare global {
+  interface Window {
+    recaptchaVerifier?: RecaptchaVerifier;
+  }
+}
 
 function AuthPageContent() {
   const router = useRouter();
@@ -47,18 +61,47 @@ function AuthPageContent() {
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // MFA States
+  const [mfaStep, setMfaStep] = useState<MfaStep>('auth');
+  const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
+  const [verificationId, setVerificationId] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    // Limpiar recaptcha al desmontar o cambiar de pantalla
+    return () => {
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear();
+        window.recaptchaVerifier = undefined;
+      }
+    };
+  }, []);
+
+  const setupRecaptcha = () => {
+    if (!window.recaptchaVerifier) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        size: 'invisible',
+      });
+    }
+    return window.recaptchaVerifier;
+  };
+
   const handleSuccess = (userRole: UserRole) => {
     setIsLoading(false);
+    toast({ title: 'Éxito', description: 'Has ingresado correctamente.' });
     router.push(`/dashboard?role=${userRole}`);
   };
 
   const handleError = (error: any) => {
     setIsLoading(false);
+    console.error('Auth Error:', error);
     let message = 'Ocurrió un error. Por favor, inténtalo de nuevo.';
     if (error.code) {
       switch (error.code) {
         case 'auth/user-not-found':
         case 'auth/wrong-password':
+        case 'auth/invalid-credential':
           message = 'Correo electrónico o contraseña incorrectos.';
           break;
         case 'auth/email-already-in-use':
@@ -67,9 +110,15 @@ function AuthPageContent() {
         case 'auth/weak-password':
           message = 'La contraseña debe tener al menos 6 caracteres.';
           break;
+        case 'auth/invalid-verification-code':
+          message = 'El código SMS ingresado es incorrecto.';
+          break;
         case 'auth/account-exists-with-different-credential':
-            message = 'Ya existe una cuenta con este correo electrónico. Intenta iniciar sesión con otro método.';
-            break;
+          message = 'Ya existe una cuenta con este correo electrónico. Intenta iniciar sesión con otro método.';
+          break;
+        case 'auth/too-many-requests':
+          message = 'Demasiados intentos. Intenta más tarde.';
+          break;
         default:
           message = error.message;
       }
@@ -77,19 +126,123 @@ function AuthPageContent() {
     toast({ title: 'Error de Autenticación', description: message, variant: 'destructive' });
   };
   
+  const handleResetPassword = async () => {
+    if (!email) {
+      toast({ title: 'Atención', description: 'Por favor, ingresa tu correo electrónico arriba y luego presiona este botón para restablecer la contraseña.', variant: 'destructive' });
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      toast({ title: 'Correo enviado', description: 'Revisa tu bandeja de entrada o carpeta de spam para restablecer tu contraseña.' });
+    } catch (error: any) {
+      handleError(error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        const userRole = userData.role as UserRole;
-        handleSuccess(userRole);
-      } else {
-        handleError({ code: 'auth/user-data-not-found', message: 'No se encontraron datos de usuario.' });
+      const user = userCredential.user;
+
+      if (!user.emailVerified) {
+        setIsLoading(false);
+        toast({ title: 'Correo no verificado', description: 'Por favor, haz clic en el enlace que te enviamos por correo electrónico para confirmar tu cuenta.', variant: 'destructive' });
+        auth.signOut();
+        return;
       }
+
+      const enrolledFactors = multiFactor(user).enrolledFactors;
+      if (enrolledFactors.length === 0) {
+        setCurrentUser(user);
+        const recaptcha = setupRecaptcha();
+        const session = await multiFactor(user).getSession();
+        
+        let phoneStr = phone;
+        if (!phoneStr) {
+           const userDoc = await getDoc(doc(db, 'users', user.uid));
+           if (userDoc.exists()) {
+             phoneStr = userDoc.data().phone || '';
+           }
+        }
+
+        if (!phoneStr) {
+          toast({ title: 'Error', description: 'No se encontró un número celular válido para el 2FA.', variant: 'destructive' });
+          setIsLoading(false);
+          return;
+        }
+
+        phoneStr = phoneStr.startsWith('+') ? phoneStr : `+52${phoneStr.replace(/\D/g, '')}`;
+        const phoneInfoOptions = { phoneNumber: phoneStr, session: session };
+        const phoneAuthProvider = new PhoneAuthProvider(auth);
+        
+        const vId = await phoneAuthProvider.verifyPhoneNumber(phoneInfoOptions, recaptcha);
+        setVerificationId(vId);
+        setIsLoading(false);
+        setMfaStep('verifyEnroll');
+        toast({ title: 'Seguridad Activada', description: `Te enviamos un SMS al ${phoneStr} para configurar tu Autenticación de Dos Pasos.` });
+        return;
+      }
+
+      await fetchUserDataAndRedirect(user.uid);
+    } catch (error: any) {
+      if (error.code === 'auth/multi-factor-auth-required') {
+        try {
+          const resolver = getMultiFactorResolver(auth, error);
+          setMfaResolver(resolver);
+          
+          const recaptcha = setupRecaptcha();
+          const phoneInfoOptions = {
+            multiFactorHint: resolver.hints[0],
+            session: resolver.session
+          };
+          
+          const phoneAuthProvider = new PhoneAuthProvider(auth);
+          const vId = await phoneAuthProvider.verifyPhoneNumber(phoneInfoOptions, recaptcha);
+          
+          setVerificationId(vId);
+          setIsLoading(false);
+          setMfaStep('verifyLogin');
+          toast({ title: 'Código SMS enviado', description: 'Por favor, ingresa el código que hemos enviado a tu celular.' });
+        } catch (mfaError) {
+          handleError(mfaError);
+        }
+      } else {
+        handleError(error);
+      }
+    }
+  };
+
+  const fetchUserDataAndRedirect = async (uid: string) => {
+    try {
+        const userDoc = await getDoc(doc(db, 'users', uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const userRole = userData.role as UserRole;
+          handleSuccess(userRole);
+        } else {
+          handleError({ code: 'auth/user-data-not-found', message: 'No se encontraron datos de usuario.' });
+        }
+    } catch (error) {
+        handleError(error);
+    }
+  };
+
+  const handleVerifyLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    try {
+      if (!mfaResolver) throw new Error("MFA Resolver not found");
+      
+      const cred = PhoneAuthProvider.credential(verificationId, verificationCode);
+      const multiFactorAssertion = PhoneMultiFactorGenerator.assertion(cred);
+      
+      const userCredential = await mfaResolver.resolveSignIn(multiFactorAssertion);
+      await fetchUserDataAndRedirect(userCredential.user.uid);
     } catch (error) {
       handleError(error);
     }
@@ -116,10 +269,8 @@ function AuthPageContent() {
           userData.fullName = fullName || user.displayName;
         }
 
-        // First, create the document with allowed fields
         await setDoc(userDocRef, userData);
 
-        // Then, if it's a carrier, update it with the token balance
         if (userRole === 'transportista') {
             await updateDoc(userDocRef, {
                 tokenBalance: 3
@@ -132,16 +283,91 @@ function AuthPageContent() {
     e.preventDefault();
     setIsLoading(true);
     try {
+      // 1. Crear el usuario
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      await createUserData(userCredential.user, role);
+      const user = userCredential.user;
+      
+      // 2. Guardar datos en Firestore
+      await createUserData(user, role);
+
+      // 3. Enviar correo de verificación antes de enrolar en 2FA
+      await sendEmailVerification(user);
+      
+      setIsLoading(false);
+      toast({ title: '¡Cuenta creada!', description: 'Revisa tu correo para activar tu cuenta. Luego inicia sesión para configurar el SMS de seguridad.' });
+      setIsLogin(true); // Regresamos a la vista de login para que ingresen cuando lo validen
+
+    } catch (error) {
+      handleError(error);
+    }
+  };
+
+  const handleVerifyEnroll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    try {
+      if (!currentUser) throw new Error("No hay un usuario en progreso de enrolamiento");
+      
+      const cred = PhoneAuthProvider.credential(verificationId, verificationCode);
+      const multiFactorAssertion = PhoneMultiFactorGenerator.assertion(cred);
+      
+      await multiFactor(currentUser).enroll(multiFactorAssertion, 'Número de Teléfono Principal');
       handleSuccess(role);
     } catch (error) {
       handleError(error);
     }
   };
 
+  // Renderizar la vista de Verificación MFA (Login o Registro)
+  if (mfaStep !== 'auth') {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4 bg-gray-50">
+        <Card className="w-full max-w-md">
+          <form onSubmit={mfaStep === 'verifyLogin' ? handleVerifyLogin : handleVerifyEnroll}>
+            <CardHeader className="text-center">
+              <CardTitle className="text-xl">Autenticación de Dos Pasos</CardTitle>
+              <CardDescription>
+                Se ha enviado un código SMS de verificación a tu dispositivo registrado.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="verificationCode">Código SMS de 6 dígitos</Label>
+                <Input 
+                  id="verificationCode" 
+                  type="text" 
+                  placeholder="123456" 
+                  required 
+                  value={verificationCode} 
+                  onChange={e => setVerificationCode(e.target.value)} 
+                  disabled={isLoading} 
+                  maxLength={6}
+                />
+              </div>
+            </CardContent>
+            <CardFooter className="flex-col gap-4">
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? 'Verificando...' : 'Verificar e Ingresar'}
+              </Button>
+              <Button 
+                variant="ghost" 
+                type="button" 
+                onClick={() => { setMfaStep('auth'); setIsLoading(false); }} 
+                disabled={isLoading}
+              >
+                Volver
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
+      </div>
+    );
+  }
+
+  // Render original de Login / Registro
   return (
     <div className="flex min-h-screen items-center justify-center p-4 bg-gray-50">
+      <div id="recaptcha-container"></div>
       <Card className="w-full max-w-md">
         <form onSubmit={isLogin ? handleLogin : handleSignup}>
           <CardHeader className="text-center">
@@ -162,7 +388,18 @@ function AuthPageContent() {
                   <Input id="email" type="email" placeholder="usuario@ejemplo.com" required value={email} onChange={e => setEmail(e.target.value)} disabled={isLoading} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="password">Contraseña</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="password">Contraseña</Label>
+                    <Button 
+                      variant="link" 
+                      type="button" 
+                      onClick={handleResetPassword} 
+                      disabled={isLoading} 
+                      className="p-0 h-auto text-xs font-normal text-muted-foreground hover:text-primary"
+                    >
+                      ¿Olvidaste tu contraseña?
+                    </Button>
+                  </div>
                   <div className="relative">
                     <Input id="password" type={showPassword ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)} disabled={isLoading} />
                     <Button
@@ -220,8 +457,9 @@ function AuthPageContent() {
                       <Input id="rfc" type="text" placeholder="ABCD123456XYZ" required value={rfc} onChange={e => setRfc(e.target.value)} disabled={isLoading} />
                     </div>
                      <div className="space-y-2">
-                      <Label htmlFor="phone">Número de Teléfono</Label>
-                      <Input id="phone" type="tel" placeholder="55 1234 5678" required value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
+                      <Label htmlFor="phone">Número de Celular (Para el SMS de verificación)</Label>
+                      <Input id="phone" type="tel" placeholder="5512345678" required value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
+                      <p className="text-xs text-gray-500">Ingresa tu celular a 10 dígitos. Recibirás un SMS para activar la cuenta.</p>
                     </div>
                      <div className="space-y-2">
                       <Label htmlFor="address">Dirección Fiscal</Label>
@@ -239,8 +477,9 @@ function AuthPageContent() {
                       <Input id="rfc-transportista" type="text" placeholder="Tu RFC" required value={rfc} onChange={e => setRfc(e.target.value)} disabled={isLoading} />
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="phone-transportista">Número de Teléfono</Label>
-                        <Input id="phone-transportista" type="tel" placeholder="55 1234 5678" required value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
+                        <Label htmlFor="phone-transportista">Número de Celular (Para el SMS de verificación)</Label>
+                        <Input id="phone-transportista" type="tel" placeholder="5512345678" required value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
+                        <p className="text-xs text-gray-500">Ingresa tu celular a 10 dígitos. Recibirás un SMS para activar la cuenta.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="address-transportista">Dirección Fiscal</Label>
