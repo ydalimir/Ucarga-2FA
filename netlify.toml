@@ -2,5 +2,9 @@
   command = "npm run build"
   publish = ".next"
 
+[build.environment]
+  # Desactiva el escaneo inteligente de secretos que bloquea claves públicas (como Firebase/Google Maps)
+  SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
