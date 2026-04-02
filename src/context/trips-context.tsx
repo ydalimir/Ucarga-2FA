@@ -81,20 +81,43 @@ export function TripsProvider({ children }: { children: ReactNode }) {
     const batch = writeBatch(db);
     let updatesMade = false;
 
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
     tripsToUpdate.forEach(trip => {
       // LÓGICA DE PAUSA AUTOMÁTICA: 
-      // Si el viaje está Pendiente y la fecha de carga (pickupDate) ya pasó, se pausa.
+      // 1. Si la fecha de carga (pickupDate) ya pasó.
+      // 2. Si han pasado más de 3 días desde su creación y sigue Pendiente.
+      
+      let shouldPause = false;
+
+      // Check pickup date
       if (trip.status === 'Pendiente' && trip.pickupDate) {
         try {
           const pickupDate = new Date(trip.pickupDate);
           if (!isNaN(pickupDate.getTime()) && now.getTime() > pickupDate.getTime()) {
-            const tripRef = doc(db, 'trips', trip.id);
-            batch.update(tripRef, { status: 'Pausado' });
-            updatesMade = true;
+            shouldPause = true;
           }
         } catch (e) {
           console.error("Error parsing pickupDate for auto-pause:", e);
         }
+      }
+
+      // Check 3-day inactivity (from createdAt)
+      if (!shouldPause && trip.status === 'Pendiente' && trip.createdAt) {
+        try {
+          const createdAtDate = trip.createdAt.toDate();
+          if (now.getTime() - createdAtDate.getTime() > THREE_DAYS_MS) {
+            shouldPause = true;
+          }
+        } catch (e) {
+          console.error("Error parsing createdAt for auto-pause:", e);
+        }
+      }
+
+      if (shouldPause) {
+        const tripRef = doc(db, 'trips', trip.id);
+        batch.update(tripRef, { status: 'Pausado' });
+        updatesMade = true;
       }
     });
 

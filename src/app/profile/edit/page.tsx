@@ -11,13 +11,14 @@ import { useTrips } from '@/context/trips-context';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db } from '@/lib/firebase';
 import { useToast } from '@/hooks/use-toast';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, Timestamp } from 'firebase/firestore';
 import { useEffect } from 'react';
 import type { CarrierProfileData, Driver, Vehicle, Trailer } from '@/lib/types';
 import { ArrowLeft, PlusCircle, Trash2, Loader2, User, Truck, Package, ShieldCheck, Edit, Save, Upload, X, File, Paperclip, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import Link from 'next/link';
 import {
   Dialog,
@@ -945,182 +946,184 @@ function FleetManagementPageContent() {
     return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-10 w-10 animate-spin" /></div>;
   }
 
-  const renderActiveTab = () => {
-    switch (activeTab) {
-      case 'vehicles':
-        return (
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <div>
-                <CardTitle>Unidades (Camiones)</CardTitle>
-                <CardDescription>Lista de tus camiones o unidades tractoras.</CardDescription>
-              </div>
-              {user && <VehicleForm
-                onFormSubmit={(newVehicle) => handleSaveItem('vehicles', newVehicle)}
-                userId={user.uid}
-              />}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="border-t pt-4">
-                {carrierData?.vehicles?.length ? (
-                  carrierData.vehicles.map((vehicle) => (
-                    <div key={vehicle.id} className="p-4 border rounded-lg mt-4 flex items-start gap-4">
-                        <Avatar className="h-16 w-16 border">
-                            <AvatarImage src={vehicle.photoUrl} />
-                            <AvatarFallback><Truck className="text-muted-foreground" /></AvatarFallback>
-                        </Avatar>
-                        <div className="flex-grow">
-                            <div className="flex items-start justify-between">
-                                <div className="font-semibold">{vehicle.brand} {vehicle.model} ({vehicle.year})</div>
-                                <div className="flex items-center gap-2">
-                                {user && <VehicleForm
-                                    onFormSubmit={(updatedVehicle) => handleSaveItem('vehicles', updatedVehicle)}
-                                    userId={user.uid}
-                                    existingVehicle={vehicle}
-                                />}
-                                <Button type="button" variant="destructive" size="icon" className="h-7 w-7" onClick={() => handleRemoveItem('vehicles', vehicle.id)}><Trash2 className="h-4 w-4" /></Button>
-                                </div>
-                            </div>
-                            <div className="text-sm text-muted-foreground grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 mt-1">
-                                <p><strong>Placa:</strong> {vehicle.licensePlate}</p>
-                                <p><strong>Tipo:</strong> {vehicle.type === 'otro' ? vehicle.otherType : vehicle.type}</p>
-                                <p><strong>Capacidad:</strong> {vehicle.loadCapacity ? `${vehicle.loadCapacity} kg` : 'N/A'}</p>
-                                <div className="flex items-center gap-2 font-medium">
-                                <MapPin className="h-4 w-4" /> {vehicle.hasGps ? 'Con GPS' : 'Sin GPS'}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No has añadido ninguna unidad todavía.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        );
-      case 'trailers':
-        return (
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <div>
-                <CardTitle>Cajas / Aditamentos</CardTitle>
-                <CardDescription>Lista de tus cajas, plataformas o aditamentos.</CardDescription>
-              </div>
-              {user && <TrailerForm
-                onFormSubmit={(newTrailer) => handleSaveItem('trailers', newTrailer)}
-                userId={user.uid}
-              />}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="border-t pt-4">
-                {carrierData?.trailers?.length ? (
-                  carrierData.trailers.map((trailer) => (
-                    <div key={trailer.id} className="p-4 border rounded-lg mt-4 flex items-start gap-4">
-                       <Avatar className="h-16 w-16 border">
-                            <AvatarImage src={trailer.photoUrl} />
-                            <AvatarFallback><Package className="text-muted-foreground" /></AvatarFallback>
-                        </Avatar>
-                        <div className="flex-grow">
-                             <div className="flex items-start justify-between">
-                                <div className="font-semibold">{trailer.type === 'Otro' ? trailer.otherType : trailer.type} {trailer.length}</div>
-                                <div className="flex items-center gap-2">
-                                {user && <TrailerForm
-                                    onFormSubmit={(updatedTrailer) => handleSaveItem('trailers', updatedTrailer)}
-                                    userId={user.uid}
-                                    existingTrailer={trailer}
-                                />}
-                                <Button type="button" variant="destructive" size="icon" className="h-7 w-7" onClick={() => handleRemoveItem('trailers', trailer.id)}><Trash2 className="h-4 w-4" /></Button>
-                                </div>
-                            </div>
-                            <div className="text-sm text-muted-foreground grid grid-cols-2 md:grid-cols-3 gap-2 items-center">
-                                <p><strong>Placa:</strong> {trailer.licensePlate}</p>
-                                <p><strong># Económico:</strong> {trailer.economicNumber || 'N/A'}</p>
-                                <p><strong>Condiciones:</strong> {trailer.specialConditions || 'Ninguna'}</p>
-                            </div>
-                        </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No has añadido ningún aditamento todavía.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        );
-      case 'drivers':
-      default:
-        return (
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <div>
-                <CardTitle>Conductores / Operadores</CardTitle>
-                <CardDescription>Esta es la lista de los conductores en tu flota.</CardDescription>
-              </div>
-              {user && <DriverForm
-                onFormSubmit={(newDriver) => handleSaveItem('drivers', newDriver)}
-                userId={user.uid}
-              />}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="border-t pt-4">
-                {carrierData?.drivers?.length ? (
-                  carrierData.drivers.map((driver) => (
-                    <div key={driver.id} className="p-4 border rounded-lg mt-4 flex items-start gap-4">
-                      <Avatar className="h-16 w-16 border">
-                        <AvatarImage src={driver.photoURL} alt={driver.name} />
-                        <AvatarFallback>{driver.name.charAt(0)}</AvatarFallback>
-                      </Avatar>
-                      <div className="flex-grow">
-                        <div className="flex items-start justify-between">
-                          <div className="font-semibold">{driver.name}</div>
-                          <div className="flex items-center gap-2">
-                            {user && <DriverForm
-                              onFormSubmit={(updatedDriver) => handleSaveItem('drivers', updatedDriver)}
-                              userId={user.uid}
-                              existingDriver={driver}
-                            />}
-                            <Button type="button" variant="destructive" size="icon" className="h-7 w-7" onClick={() => handleRemoveItem('drivers', driver.id)}><Trash2 className="h-4 w-4" /></Button>
-                          </div>
-                        </div>
-                        <div className="text-sm text-muted-foreground grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1 mt-1">
-                          <p><strong>Tel:</strong> {driver.phone || 'N/A'}</p>
-                          <p><strong>RFC:</strong> {driver.rfc || 'N/A'}</p>
-                          <p><strong># Operador:</strong> {driver.operatorNumber || 'N/A'}</p>
-                          <p><strong>CURP:</strong> {driver.curp || 'N/A'}</p>
-                          <p><strong>Licencia:</strong> {driver.license?.licenseType ? `Tipo ${driver.license.licenseType}` : 'N/A'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No has añadido ningún conductor todavía.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        );
-    }
-  };
-
   return (
-    <div className="container mx-auto p-4 md:p-6">
+    <div className="container mx-auto p-4 md:p-6 max-w-5xl">
         <div className="mb-6 flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => router.back()}><ArrowLeft className="h-6 w-6" /></Button>
-            <h1 className="text-2xl font-bold text-primary">Gestionar Flota y Operadores</h1>
+            <Button variant="ghost" size="icon" onClick={() => router.back()} className="shrink-0"><ArrowLeft className="h-6 w-6" /></Button>
+            <h1 className="text-xl md:text-2xl font-bold text-primary truncate">Gestionar Flota y Operadores</h1>
         </div>
         
-        <Alert className="mb-8">
+        <Alert className="mb-6">
             <ShieldCheck className="h-4 w-4" />
             <AlertTitle>Completa la información de tu flota</AlertTitle>
-            <AlertDescription>
-            Mantener esta información actualizada permitirá a las empresas conocer tu capacidad y equipo disponible al momento de ofertar.
+            <AlertDescription className="text-sm">
+            Mantener esta información actualizada permitirá a las empresas conocer tu capacidad y equipo disponible.
             </AlertDescription>
         </Alert>
         
-        <div className="mt-6">
-          {renderActiveTab()}
-        </div>
+        <Tabs defaultValue={activeTab} className="w-full" onValueChange={(value) => {
+            const params = new URLSearchParams(searchParams);
+            params.set('tab', value);
+            router.replace(`?${params.toString()}`);
+        }}>
+          <TabsList className="grid w-full grid-cols-3 mb-8">
+            <TabsTrigger value="drivers" className="text-xs md:text-sm">Conductores</TabsTrigger>
+            <TabsTrigger value="vehicles" className="text-xs md:text-sm">Unidades</TabsTrigger>
+            <TabsTrigger value="trailers" className="text-xs md:text-sm">Remolques</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="vehicles" className="space-y-4">
+              <Card>
+                <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <CardTitle>Unidades (Camiones)</CardTitle>
+                    <CardDescription>Lista de tus camiones o unidades tractoras.</CardDescription>
+                  </div>
+                  {user && <VehicleForm
+                    onFormSubmit={(newVehicle) => handleSaveItem('vehicles', newVehicle)}
+                    userId={user.uid}
+                  />}
+                </CardHeader>
+                <CardContent className="space-y-4 px-2 md:px-6">
+                  <div className="border-t pt-2">
+                    {carrierData?.vehicles?.length ? (
+                      carrierData.vehicles.map((vehicle) => (
+                        <div key={vehicle.id} className="p-3 md:p-4 border rounded-lg mt-3 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                            <Avatar className="h-16 w-16 border shrink-0">
+                                <AvatarImage src={vehicle.photoUrl} className="object-cover" />
+                                <AvatarFallback><Truck className="text-muted-foreground" /></AvatarFallback>
+                            </Avatar>
+                            <div className="flex-grow w-full text-center sm:text-left">
+                                <div className="flex items-start justify-between">
+                                    <div className="font-semibold text-lg sm:text-base">{vehicle.brand} {vehicle.model} ({vehicle.year})</div>
+                                    <div className="flex items-center gap-2">
+                                    {user && <VehicleForm
+                                        onFormSubmit={(updatedVehicle) => handleSaveItem('vehicles', updatedVehicle)}
+                                        userId={user.uid}
+                                        existingVehicle={vehicle}
+                                    />}
+                                    <Button type="button" variant="destructive" size="icon" className="h-7 w-7" onClick={() => handleRemoveItem('vehicles', vehicle.id)}><Trash2 className="h-4 w-4" /></Button>
+                                    </div>
+                                </div>
+                                <div className="text-sm text-muted-foreground grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1 mt-2">
+                                    <p><strong>Placa:</strong> {vehicle.licensePlate}</p>
+                                    <p><strong>Tipo:</strong> {vehicle.type === 'otro' ? vehicle.otherType : vehicle.type}</p>
+                                    <p><strong>Capacidad:</strong> {vehicle.loadCapacity ? `${vehicle.loadCapacity} kg` : 'N/A'}</p>
+                                    <div className="flex items-center justify-center sm:justify-start gap-2 font-medium">
+                                    <MapPin className="h-4 w-4" /> {vehicle.hasGps ? 'Con GPS' : 'Sin GPS'}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-center text-muted-foreground py-8">No has añadido ninguna unidad todavía.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+          </TabsContent>
+
+          <TabsContent value="trailers" className="space-y-4">
+              <Card>
+                <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <CardTitle>Cajas / Aditamentos</CardTitle>
+                    <CardDescription>Lista de tus cajas, plataformas o aditamentos.</CardDescription>
+                  </div>
+                  {user && <TrailerForm
+                    onFormSubmit={(newTrailer) => handleSaveItem('trailers', newTrailer)}
+                    userId={user.uid}
+                  />}
+                </CardHeader>
+                <CardContent className="space-y-4 px-2 md:px-6">
+                  <div className="border-t pt-2">
+                    {carrierData?.trailers?.length ? (
+                      carrierData.trailers.map((trailer) => (
+                        <div key={trailer.id} className="p-3 md:p-4 border rounded-lg mt-3 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                           <Avatar className="h-16 w-16 border shrink-0">
+                                <AvatarImage src={trailer.photoUrl} className="object-cover" />
+                                <AvatarFallback><Package className="text-muted-foreground" /></AvatarFallback>
+                            </Avatar>
+                            <div className="flex-grow w-full text-center sm:text-left">
+                                 <div className="flex items-start justify-between">
+                                    <div className="font-semibold text-lg sm:text-base">{trailer.type === 'Otro' ? trailer.otherType : trailer.type} {trailer.length}</div>
+                                    <div className="flex items-center gap-2">
+                                    {user && <TrailerForm
+                                        onFormSubmit={(updatedTrailer) => handleSaveItem('trailers', updatedTrailer)}
+                                        userId={user.uid}
+                                        existingTrailer={trailer}
+                                    />}
+                                    <Button type="button" variant="destructive" size="icon" className="h-7 w-7" onClick={() => handleRemoveItem('trailers', trailer.id)}><Trash2 className="h-4 w-4" /></Button>
+                                    </div>
+                                </div>
+                                <div className="text-sm text-muted-foreground grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-2">
+                                    <p><strong>Placa:</strong> {trailer.licensePlate}</p>
+                                    <p><strong># Económico:</strong> {trailer.economicNumber || 'N/A'}</p>
+                                    <p><strong>Condiciones:</strong> {trailer.specialConditions || 'Ninguna'}</p>
+                                </div>
+                            </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-center text-muted-foreground py-8">No has añadido ningún aditamento todavía.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+          </TabsContent>
+
+          <TabsContent value="drivers" className="space-y-4">
+              <Card>
+                <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <CardTitle>Conductores / Operadores</CardTitle>
+                    <CardDescription>Esta es la lista de los conductores en tu flota.</CardDescription>
+                  </div>
+                  {user && <DriverForm
+                    onFormSubmit={(newDriver) => handleSaveItem('drivers', newDriver)}
+                    userId={user.uid}
+                  />}
+                </CardHeader>
+                <CardContent className="space-y-4 px-2 md:px-6">
+                  <div className="border-t pt-2">
+                    {carrierData?.drivers?.length ? (
+                      carrierData.drivers.map((driver) => (
+                        <div key={driver.id} className="p-3 md:p-4 border rounded-lg mt-3 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                          <Avatar className="h-16 w-16 border shrink-0">
+                            <AvatarImage src={driver.photoURL} alt={driver.name} className="object-cover" />
+                            <AvatarFallback>{driver.name.charAt(0)}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex-grow w-full text-center sm:text-left">
+                            <div className="flex items-start justify-between">
+                              <div className="font-semibold text-lg sm:text-base">{driver.name}</div>
+                              <div className="flex items-center gap-2">
+                                {user && <DriverForm
+                                  onFormSubmit={(updatedDriver) => handleSaveItem('drivers', updatedDriver)}
+                                  userId={user.uid}
+                                  existingDriver={driver}
+                                />}
+                                <Button type="button" variant="destructive" size="icon" className="h-7 w-7" onClick={() => handleRemoveItem('drivers', driver.id)}><Trash2 className="h-4 w-4" /></Button>
+                              </div>
+                            </div>
+                            <div className="text-sm text-muted-foreground grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1 mt-2">
+                              <p><strong>Tel:</strong> {driver.phone || 'N/A'}</p>
+                              <p><strong>RFC:</strong> {driver.rfc || 'N/A'}</p>
+                              <p><strong># Operador:</strong> {driver.operatorNumber || 'N/A'}</p>
+                              <p><strong>CURP:</strong> {driver.curp || 'N/A'}</p>
+                              <p><strong>Licencia:</strong> {driver.license?.licenseType ? `Tipo ${driver.license.licenseType}` : 'N/A'}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-center text-muted-foreground py-8">No has añadido ningún conductor todavía.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+          </TabsContent>
+        </Tabs>
     </div>
   );
 }
