@@ -13,6 +13,7 @@ import { useSearchParams } from "next/navigation";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Loader2 } from "lucide-react";
 
+
 export default function SearchPage() {
   const { trips, loading } = useTrips();
   const searchParams = useSearchParams();

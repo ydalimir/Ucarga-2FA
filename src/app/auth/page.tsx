@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, Suspense, useEffect } from 'react';
+import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   createUserWithEmailAndPassword,
@@ -8,12 +8,6 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification,
   User,
-  getMultiFactorResolver,
-  PhoneAuthProvider,
-  PhoneMultiFactorGenerator,
-  multiFactor,
-  RecaptchaVerifier,
-  MultiFactorResolver
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
@@ -30,13 +24,6 @@ import Link from 'next/link';
 import { Textarea } from '@/components/ui/textarea';
 
 type UserRole = 'empresa' | 'transportista';
-type MfaStep = 'auth' | 'verifyLogin' | 'verifyEnroll';
-
-declare global {
-  interface Window {
-    recaptchaVerifier?: RecaptchaVerifier;
-  }
-}
 
 function AuthPageContent() {
   const router = useRouter();
@@ -61,32 +48,6 @@ function AuthPageContent() {
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // MFA States
-  const [mfaStep, setMfaStep] = useState<MfaStep>('auth');
-  const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
-  const [verificationId, setVerificationId] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-
-  useEffect(() => {
-    // Limpiar recaptcha al desmontar o cambiar de pantalla
-    return () => {
-      if (window.recaptchaVerifier) {
-        window.recaptchaVerifier.clear();
-        window.recaptchaVerifier = undefined;
-      }
-    };
-  }, []);
-
-  const setupRecaptcha = () => {
-    if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'invisible',
-      });
-    }
-    return window.recaptchaVerifier;
-  };
-
   const handleSuccess = (userRole: UserRole) => {
     setIsLoading(false);
     toast({ title: 'Éxito', description: 'Has ingresado correctamente.' });
@@ -109,9 +70,6 @@ function AuthPageContent() {
           break;
         case 'auth/weak-password':
           message = 'La contraseña debe tener al menos 6 caracteres.';
-          break;
-        case 'auth/invalid-verification-code':
-          message = 'El código SMS ingresado es incorrecto.';
           break;
         case 'auth/account-exists-with-different-credential':
           message = 'Ya existe una cuenta con este correo electrónico. Intenta iniciar sesión con otro método.';
@@ -157,64 +115,9 @@ function AuthPageContent() {
         return;
       }
 
-      const enrolledFactors = multiFactor(user).enrolledFactors;
-      if (enrolledFactors.length === 0) {
-        setCurrentUser(user);
-        const recaptcha = setupRecaptcha();
-        const session = await multiFactor(user).getSession();
-        
-        let phoneStr = phone;
-        if (!phoneStr) {
-           const userDoc = await getDoc(doc(db, 'users', user.uid));
-           if (userDoc.exists()) {
-             phoneStr = userDoc.data().phone || '';
-           }
-        }
-
-        if (!phoneStr) {
-          toast({ title: 'Error', description: 'No se encontró un número celular válido para el 2FA.', variant: 'destructive' });
-          setIsLoading(false);
-          return;
-        }
-
-        phoneStr = phoneStr.startsWith('+') ? phoneStr : `+52${phoneStr.replace(/\D/g, '')}`;
-        const phoneInfoOptions = { phoneNumber: phoneStr, session: session };
-        const phoneAuthProvider = new PhoneAuthProvider(auth);
-        
-        const vId = await phoneAuthProvider.verifyPhoneNumber(phoneInfoOptions, recaptcha);
-        setVerificationId(vId);
-        setIsLoading(false);
-        setMfaStep('verifyEnroll');
-        toast({ title: 'Seguridad Activada', description: `Te enviamos un SMS al ${phoneStr} para configurar tu Autenticación de Dos Pasos.` });
-        return;
-      }
-
       await fetchUserDataAndRedirect(user.uid);
     } catch (error: any) {
-      if (error.code === 'auth/multi-factor-auth-required') {
-        try {
-          const resolver = getMultiFactorResolver(auth, error);
-          setMfaResolver(resolver);
-          
-          const recaptcha = setupRecaptcha();
-          const phoneInfoOptions = {
-            multiFactorHint: resolver.hints[0],
-            session: resolver.session
-          };
-          
-          const phoneAuthProvider = new PhoneAuthProvider(auth);
-          const vId = await phoneAuthProvider.verifyPhoneNumber(phoneInfoOptions, recaptcha);
-          
-          setVerificationId(vId);
-          setIsLoading(false);
-          setMfaStep('verifyLogin');
-          toast({ title: 'Código SMS enviado', description: 'Por favor, ingresa el código que hemos enviado a tu celular.' });
-        } catch (mfaError) {
-          handleError(mfaError);
-        }
-      } else {
-        handleError(error);
-      }
+      handleError(error);
     }
   };
 
@@ -233,22 +136,6 @@ function AuthPageContent() {
     }
   };
 
-  const handleVerifyLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    try {
-      if (!mfaResolver) throw new Error("MFA Resolver not found");
-      
-      const cred = PhoneAuthProvider.credential(verificationId, verificationCode);
-      const multiFactorAssertion = PhoneMultiFactorGenerator.assertion(cred);
-      
-      const userCredential = await mfaResolver.resolveSignIn(multiFactorAssertion);
-      await fetchUserDataAndRedirect(userCredential.user.uid);
-    } catch (error) {
-      handleError(error);
-    }
-  };
-
   const createUserData = async (user: User, userRole: UserRole) => {
     const userDocRef = doc(db, 'users', user.uid);
     const userDoc = await getDoc(userDocRef);
@@ -259,7 +146,7 @@ function AuthPageContent() {
           email: user.email,
           role: userRole,
           createdAt: new Date().toISOString(),
-          phone: phone || user.phoneNumber,
+          phone: phone || '',
           rfc: rfc,
           address: address,
         };
@@ -291,85 +178,22 @@ function AuthPageContent() {
       // 2. Guardar datos en Firestore
       await createUserData(user, role);
 
-      // 3. Enviar correo de verificación antes de enrolar en 2FA
+      // 3. Enviar correo de verificación
       auth.languageCode = 'es'; // Forzar correo en español
       await sendEmailVerification(user);
       
       setIsLoading(false);
-      toast({ title: '¡Cuenta creada!', description: 'Revisa tu correo para activar tu cuenta. Luego inicia sesión para configurar el SMS de seguridad.' });
-      setIsLogin(true); // Regresamos a la vista de login para que ingresen cuando lo validen
+      toast({ title: '¡Cuenta creada!', description: 'Revisa tu correo electrónico para activar tu cuenta. Luego inicia sesión.' });
+      setIsLogin(true); // Regresamos a la vista de login
 
     } catch (error) {
       handleError(error);
     }
   };
 
-  const handleVerifyEnroll = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    try {
-      if (!currentUser) throw new Error("No hay un usuario en progreso de enrolamiento");
-      
-      const cred = PhoneAuthProvider.credential(verificationId, verificationCode);
-      const multiFactorAssertion = PhoneMultiFactorGenerator.assertion(cred);
-      
-      await multiFactor(currentUser).enroll(multiFactorAssertion, 'Número de Teléfono Principal');
-      handleSuccess(role);
-    } catch (error) {
-      handleError(error);
-    }
-  };
-
-  // Renderizar la vista de Verificación MFA (Login o Registro)
-  if (mfaStep !== 'auth') {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4 bg-gray-50">
-        <Card className="w-full max-w-md">
-          <form onSubmit={mfaStep === 'verifyLogin' ? handleVerifyLogin : handleVerifyEnroll}>
-            <CardHeader className="text-center">
-              <CardTitle className="text-xl">Autenticación de Dos Pasos</CardTitle>
-              <CardDescription>
-                Se ha enviado un código SMS de verificación a tu dispositivo registrado.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="verificationCode">Código SMS de 6 dígitos</Label>
-                <Input 
-                  id="verificationCode" 
-                  type="text" 
-                  placeholder="123456" 
-                  required 
-                  value={verificationCode} 
-                  onChange={e => setVerificationCode(e.target.value)} 
-                  disabled={isLoading} 
-                  maxLength={6}
-                />
-              </div>
-            </CardContent>
-            <CardFooter className="flex-col gap-4">
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? 'Verificando...' : 'Verificar e Ingresar'}
-              </Button>
-              <Button 
-                variant="ghost" 
-                type="button" 
-                onClick={() => { setMfaStep('auth'); setIsLoading(false); }} 
-                disabled={isLoading}
-              >
-                Volver
-              </Button>
-            </CardFooter>
-          </form>
-        </Card>
-      </div>
-    );
-  }
-
-  // Render original de Login / Registro
+  // Render de Login / Registro
   return (
     <div className="flex min-h-screen items-center justify-center p-4 bg-gray-50">
-      <div id="recaptcha-container"></div>
       <Card className="w-full max-w-md">
         <form onSubmit={isLogin ? handleLogin : handleSignup}>
           <CardHeader className="text-center">
@@ -459,9 +283,9 @@ function AuthPageContent() {
                       <Input id="rfc" type="text" placeholder="ABCD123456XYZ" required value={rfc} onChange={e => setRfc(e.target.value)} disabled={isLoading} />
                     </div>
                      <div className="space-y-2">
-                      <Label htmlFor="phone">Número de Celular (Para el SMS de verificación)</Label>
-                      <Input id="phone" type="tel" placeholder="5512345678" required value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
-                      <p className="text-xs text-gray-500">Ingresa tu celular a 10 dígitos. Recibirás un SMS para activar la cuenta.</p>
+                      <Label htmlFor="phone">Número de Celular (contacto)</Label>
+                      <Input id="phone" type="tel" placeholder="5512345678" value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
+                      <p className="text-xs text-gray-500">Opcional. Solo para contacto, no se usará para verificación.</p>
                     </div>
                      <div className="space-y-2">
                       <Label htmlFor="address">Dirección Fiscal</Label>
@@ -479,9 +303,9 @@ function AuthPageContent() {
                       <Input id="rfc-transportista" type="text" placeholder="Tu RFC" required value={rfc} onChange={e => setRfc(e.target.value)} disabled={isLoading} />
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="phone-transportista">Número de Celular (Para el SMS de verificación)</Label>
-                        <Input id="phone-transportista" type="tel" placeholder="5512345678" required value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
-                        <p className="text-xs text-gray-500">Ingresa tu celular a 10 dígitos. Recibirás un SMS para activar la cuenta.</p>
+                        <Label htmlFor="phone-transportista">Número de Celular (contacto)</Label>
+                        <Input id="phone-transportista" type="tel" placeholder="5512345678" value={phone} onChange={e => setPhone(e.target.value)} disabled={isLoading} />
+                        <p className="text-xs text-gray-500">Opcional. Solo para contacto, no se usará para verificación.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="address-transportista">Dirección Fiscal</Label>
