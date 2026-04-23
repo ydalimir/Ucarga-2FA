@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  sendPasswordResetEmail,
   sendEmailVerification,
   User,
 } from 'firebase/auth';
@@ -84,23 +83,6 @@ function AuthPageContent() {
     toast({ title: 'Error de Autenticación', description: message, variant: 'destructive' });
   };
   
-  const handleResetPassword = async () => {
-    if (!email) {
-      toast({ title: 'Atención', description: 'Por favor, ingresa tu correo electrónico arriba y luego presiona este botón para restablecer la contraseña.', variant: 'destructive' });
-      return;
-    }
-    setIsLoading(true);
-    try {
-      auth.languageCode = 'es'; // Forzar correo en español
-      await sendPasswordResetEmail(auth, email);
-      toast({ title: 'Correo enviado', description: 'Revisa tu bandeja de entrada o carpeta de spam para restablecer tu contraseña.' });
-    } catch (error: any) {
-      handleError(error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -216,15 +198,12 @@ function AuthPageContent() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label htmlFor="password">Contraseña</Label>
-                    <Button 
-                      variant="link" 
-                      type="button" 
-                      onClick={handleResetPassword} 
-                      disabled={isLoading} 
-                      className="p-0 h-auto text-xs font-normal text-muted-foreground hover:text-primary"
+                    <Link 
+                      href="/auth/forgot-password"
+                      className="text-xs font-normal text-muted-foreground hover:text-primary"
                     >
                       ¿Olvidaste tu contraseña?
-                    </Button>
+                    </Link>
                   </div>
                   <div className="relative">
                     <Input id="password" type={showPassword ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)} disabled={isLoading} />
@@ -333,6 +312,9 @@ function AuthPageContent() {
                       {showSignupPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
                     </Button>
                   </div>
+                  <p className={`text-xs mt-1 transition-colors ${password.length >= 6 ? 'text-green-600' : 'text-muted-foreground'}`}>
+                    {password.length >= 6 ? '✓ Contraseña válida' : 'Mínimo 6 caracteres'}
+                  </p>
                 </div>
 
               </CardContent>

@@ -173,9 +173,19 @@ const TripsList = ({ tripsToShow, loading, filters }: { tripsToShow: Trip[], loa
     return (
         <div className="space-y-4">
             {filteredTrips.length === 0 ? (
-                <Card>
-                    <CardContent className="p-8 text-center text-muted-foreground">
-                        <p>No has creado ninguna actividad que coincida con los filtros.</p>
+                <Card className="border-dashed border-2">
+                    <CardContent className="flex flex-col items-center justify-center p-12 text-center text-muted-foreground">
+                        <div className="rounded-full bg-primary/10 p-4 mb-4">
+                            <FileText className="h-8 w-8 text-primary" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-foreground mb-2">Aún no hay actividades</h3>
+                        <p className="max-w-sm mx-auto mb-6">No tienes actividades que coincidan con los criterios o aún no has creado ninguna.</p>
+                        <Button asChild>
+                            <Link href={`/running/new?role=empresa`}>
+                                <PlusCircle className="mr-2 h-4 w-4" />
+                                Crear mi primera carga
+                            </Link>
+                        </Button>
                     </CardContent>
                 </Card>
             ) : (

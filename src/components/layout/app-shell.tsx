@@ -26,6 +26,14 @@ function AppShellContent({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!roleLoading && user && dbRole) {
+      if (pathname === '/auth' || pathname === '/') {
+        router.replace(`/dashboard?role=${dbRole}`);
+      }
+    }
+  }, [user, dbRole, pathname, roleLoading, router]);
+
+  useEffect(() => {
     // Only perform role-based redirection if the user is logged in (dbRole is not null)
     if (!roleLoading && dbRole && urlRole && dbRole !== urlRole) {
       // If the role in the URL does not match the role in the database,
@@ -34,7 +42,7 @@ function AppShellContent({ children }: { children: React.ReactNode }) {
     }
   }, [dbRole, urlRole, roleLoading, router]);
 
-  const noNavRoutes = ['/', '/auth', '/terms', '/privacy', '/admin/verifier'];
+  const noNavRoutes = ['/', '/auth', '/auth/forgot-password', '/terms', '/privacy', '/admin/verifier'];
   const isBidPage = pathname.startsWith('/trips/') && pathname.endsWith('/bid');
   const isChatPage = pathname.startsWith('/chat/');
   
