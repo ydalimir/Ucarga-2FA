@@ -875,7 +875,20 @@ function CreateTripPageContent() {
         router.push(redirectUrl);
     } catch(e: any) {
         console.error("Error creating trip:", e);
-        toast({ title: 'Error al crear', description: e.message || 'No se pudo guardar la solicitud. Por favor, inténtalo de nuevo.', variant: 'destructive'});
+        
+        const errorMsg = e.message || 'No se pudo guardar la solicitud. Por favor, inténtalo de nuevo.';
+        
+        // Handling Next.js stale Server Action error gracefully
+        if (errorMsg.includes("was not found on the server")) {
+            toast({ 
+                title: 'Actualización en progreso', 
+                description: 'El sistema se ha actualizado. Estamos recargando tu página para aplicar las mejoras...', 
+            });
+            setTimeout(() => window.location.reload(), 2000);
+        } else {
+            toast({ title: 'Error al crear', description: errorMsg, variant: 'destructive'});
+        }
+
         // Attempt to delete the trip document if it was created but something failed afterwards
         if (tripId) {
             await deleteTrip(tripId).catch(delErr => console.error("Failed to clean up trip document after error:", delErr));
