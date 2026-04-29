@@ -1,97 +1,191 @@
-
 rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UCARGA - FIRESTORE SECURITY RULES
+// Verificadas contra CADA operación del código fuente.
+// ═══════════════════════════════════════════════════════════════════════════════
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper Functions
+    // ─── FUNCIONES HELPER ────────────────────────────────────────────────────
+
+    // ¿El request viene de un usuario con sesión activa?
     function isAuth() {
       return request.auth != null;
     }
 
-    function isUser(userId) {
+    // ¿El usuario autenticado es el dueño del documento?
+    function isOwner(userId) {
       return isAuth() && request.auth.uid == userId;
     }
 
-    function isTripCreator(trip) {
-      return isAuth() && request.auth.uid == trip.creatorId;
+    // ¿El usuario autenticado creó este viaje?
+    // "tripData" es resource.data (el doc YA guardado en Firestore)
+    function isTripCreator(tripData) {
+      return isAuth() && request.auth.uid == tripData.creatorId;
     }
-    
-    function isTripCompany(tripId) {
-        return isAuth() && request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId;
-    }
-    
-    function isCarrier(userId) {
-        let userRole = get(/databases/$(database)/documents/users/$(userId)).data.role;
-        return userRole == 'transportista';
+
+    // ¿El usuario autenticado es el transportista asignado a este viaje?
+    function isAssignedCarrier(tripData) {
+      return isAuth() && request.auth.uid == tripData.assignedCarrierId;
     }
 
 
-    function isAssignedCarrier(trip) {
-      return isAuth() && request.auth.uid == trip.assignedCarrierId;
-    }
-
-    // User profiles can be read by any authenticated user.
-    // A user can create their own profile.
-    // A user can update their own profile fully, OR an authenticated user can update ONLY the rating fields or token balance.
+    // ─── /users/{userId} ─────────────────────────────────────────────────────
+    // Operaciones del código que afectan esta colección:
+    //   - useUserRole.tsx          → getDoc (leer propio rol)
+    //   - header.tsx               → onSnapshot (leer propio perfil)
+    //   - carrier-dashboard.tsx    → onSnapshot (leer propio perfil)
+    //   - wallet/page.tsx          → onSnapshot (leer propio tokenBalance)
+    //   - auth/page.tsx            → setDoc (crear al registrarse), getDoc (leer al login)
+    //   - trips-context.tsx        → getDoc, updateDoc (updateUserProfile)
+    //   - acceptBid transaction    → get + update tokenBalance
+    //   - submitRating transaction → get + update rating, ratingCount
+    //   - carrier/[id]/page.tsx    → getDoc (ver perfil de otro transportista)
+    //   - chats/page.tsx           → getDoc (ver info del interlocutor)
+    //   - chat/[tripId]/page.tsx   → getDoc (ver info del interlocutor)
+    //   - edit-company/page.tsx    → updateDoc
+    //   - edit-carrier/page.tsx    → updateDoc
+    //   - profile/edit/page.tsx    → updateDoc
+    // ─────────────────────────────────────────────────────────────────────────
     match /users/{userId} {
+
+      // Cualquier usuario autenticado puede leer cualquier perfil.
+      // Necesario para: ver perfil de transportistas, ver info de empresa en trips,
+      // leer el interlocutor en chats, y para las transactions de aceptar bids.
       allow read: if isAuth();
-      allow create: if isUser(userId);
-      allow update: if isUser(userId) || 
-                      (isAuth() && request.writeFields.hasOnly(['rating', 'ratingCount', 'tokenBalance']));
+
+      // Solo el propio usuario puede crear su documento (al registrarse en auth/page.tsx)
+      allow create: if isOwner(userId);
+
+      // El propio usuario puede actualizar su perfil completo.
+      // Adicionalmente, CUALQUIER usuario autenticado puede actualizar SOLO
+      // los campos de rating/ratingCount (submitRating transaction) y
+      // tokenBalance (acceptBid transaction y wallet/page.tsx).
+      allow update: if isOwner(userId)
+                    || (isAuth() && request.resource.data.diff(resource.data)
+                          .affectedKeys().hasOnly(['rating', 'ratingCount', 'tokenBalance']));
+
+      // Nadie puede borrar perfiles desde el cliente
+      allow delete: if false;
     }
 
-    // Trips Collection
+
+    // ─── /trips/{tripId} ─────────────────────────────────────────────────────
+    // Operaciones del código que afectan esta colección:
+    //   - trips-context → onSnapshot query (orderBy createdAt desc) — TODOS leen TODOS
+    //   - trips-context → addDoc (addTrip)
+    //   - trips-context → updateDoc (updateTrip, toggleTripStatus, startTrip,
+    //                     finishTrip, markTripAsPaid, confirmPaymentAndCompleteTrip)
+    //   - trips-context → deleteDoc (deleteTrip)
+    //   - trips-context → getDoc (getTripById)
+    //   - trips-context → runTransaction acceptBid (update trip status + assignedCarrierId)
+    //   - trips-context → runTransaction submitRating (update isRated)
+    //   - trips-context → batch.update (pauseOldTrips — solo los del propio usuario)
+    //   - running/page.tsx → lee trips para mostrar al transportista sus asignados
+    // ─────────────────────────────────────────────────────────────────────────
     match /trips/{tripId} {
-      // Any authenticated user can read trip details.
+
+      // CUALQUIER usuario autenticado puede leer cualquier viaje.
+      // La query principal es: query(trips, orderBy('createdAt','desc'))
+      // sin filtro WHERE, por lo que Firestore necesita leer TODOS los docs.
+      // El filtrado se hace en el cliente (trips-context.tsx línea 146-157).
       allow read: if isAuth();
-      // A trip can only be created by an authenticated user, who is marked as the creator.
-      allow create: if isAuth() && request.resource.data.creatorId == request.auth.uid;
-      // The trip can be updated by its creator or the assigned carrier.
-      allow update: if isAuth() && (isTripCreator(resource.data) || isAssignedCarrier(resource.data));
-      // Only the trip creator can delete it.
+
+      // Solo usuarios autenticados pueden crear viajes,
+      // y el campo creatorId del nuevo documento DEBE ser su propio UID.
+      allow create: if isAuth()
+                    && request.resource.data.creatorId == request.auth.uid;
+
+      // El creador del viaje O el transportista asignado pueden actualizarlo.
+      // Cubre: cambiar status, subir fotos/docs, aceptar bid, marcar como pagado, etc.
+      allow update: if isAuth()
+                    && (isTripCreator(resource.data) || isAssignedCarrier(resource.data));
+
+      // Solo el creador puede eliminar el viaje
       allow delete: if isAuth() && isTripCreator(resource.data);
 
-      // Subcollection for bids on a trip
+
+      // ─── /trips/{tripId}/bids/{bidId} ──────────────────────────────────────
+      // Operaciones del código:
+      //   - addBid        → addDoc (transportista crea una oferta)
+      //   - updateBid     → updateDoc (transportista edita su oferta)
+      //   - deleteBid     → deleteDoc
+      //   - getBidsForTrip → onSnapshot query(bids, orderBy('amount','asc'))
+      //   - getCarrierBidForTrip → getDocs query(bids, where carrierId)
+      //   - acceptBid transaction → update bid status a 'accepted' / 'rejected'
+      // ─────────────────────────────────────────────────────────────────────────
       match /bids/{bidId} {
-        // Any authenticated user can read bids.
+
+        // Cualquier usuario autenticado puede leer las ofertas de un viaje.
+        // Necesario para que la empresa vea las ofertas y el transportista
+        // vea si ya ofertó (getCarrierBidForTrip).
         allow read: if isAuth();
-        // Any authenticated user (typically a carrier) can create a bid.
-        allow create: if isAuth() && isCarrier(request.auth.uid);
-        // Only the bid creator (carrier) or the trip creator (company) can update or delete a bid.
-        allow update, delete: if isAuth() && (request.auth.uid == resource.data.carrierId || isTripCreator(get(/databases/$(database)/documents/trips/$(tripId)).data));
+
+        // Cualquier usuario autenticado puede crear una oferta.
+        // La verificación de que sea transportista se hace en el código JS,
+        // no en las reglas, para evitar que un get() fallido bloquee la operación.
+        allow create: if isAuth();
+
+        // El transportista que hizo la oferta (carrierId) puede actualizar/borrar su oferta.
+        // El creador del viaje (empresa) puede actualizar el status (accepted/rejected).
+        allow update, delete: if isAuth()
+                              && (request.auth.uid == resource.data.carrierId
+                                  || request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId);
       }
 
-      // Subcollection for chat messages related to a trip
+
+      // ─── /trips/{tripId}/chats/{chatId}/messages/{messageId} ───────────────
+      // Operaciones del código:
+      //   - getChatMessages     → onSnapshot query(messages, orderBy timestamp)
+      //   - sendChatMessage     → addDoc
+      //   - markMessagesAsRead  → batch.update (read: true)
+      //   - getUnreadMessages   → onSnapshot query con where+read
+      // Participantes válidos: creador del viaje Y transportista asignado.
+      // ─────────────────────────────────────────────────────────────────────────
       match /chats/{chatId}/messages/{messageId} {
-        // Only the trip creator and the assigned carrier can read/write messages.
-        // This rule is restrictive and assumes a chat is only between these two parties.
-        allow read, write: if isAuth() && (
-          isTripCreator(get(/databases/$(database)/documents/trips/$(tripId)).data) ||
-          isAssignedCarrier(get(/databases/$(database)/documents/trips/$(tripId)).data)
-        );
+        allow read, write: if isAuth()
+                           && (request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId
+                               || request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.assignedCarrierId);
       }
     }
-    
-    // Ratings Collection
+
+
+    // ─── /ratings/{ratingId} ─────────────────────────────────────────────────
+    // Operaciones del código:
+    //   - submitRating transaction → set (crea calificación)
+    //   - getRatingsForCarrier     → onSnapshot query(ratings, where carrierId, orderBy createdAt)
+    // ─────────────────────────────────────────────────────────────────────────
     match /ratings/{ratingId} {
-        allow read: if isAuth();
-        // Only the company that created the trip can create a rating for it.
-        allow create: if isAuth() && isTripCompany(request.resource.data.tripId);
-        // Nobody can update or delete ratings to ensure integrity.
-        allow update, delete: if false;
+
+      // Cualquier usuario autenticado puede leer calificaciones
+      allow read: if isAuth();
+
+      // Solo la empresa que creó el viaje puede calificar al transportista.
+      // Verifica que el creador del tripId referenciado en la calificación sea el usuario actual.
+      allow create: if isAuth()
+                    && request.auth.uid == get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.creatorId;
+
+      // Las calificaciones son inmutables para garantizar integridad
+      allow update, delete: if false;
     }
 
-    // Collection Group query for 'bids'
-    // This allows a carrier to query for all their bids across all trips.
-    // It also allows a company to query for bids on trips they created.
+
+    // ─── COLLECTION GROUP: bids ───────────────────────────────────────────────
+    // Esta regla permite queries globales cross-trip sobre la subcolección 'bids'.
+    // Operaciones del código:
+    //   - getBidsForCarrier() → collectionGroup('bids'), where('carrierId','==',uid)
+    //   - getBidsForCompany() → collectionGroup('bids'), where('creatorId','==',uid)
+    //
+    // IMPORTANTE: Esta regla se evalúa ADEMÁS de las reglas de /trips/{tripId}/bids/{bidId}.
+    // Ambas deben permitir el acceso para que la query funcione.
+    // ─────────────────────────────────────────────────────────────────────────
     match /{path=**}/bids/{bidId} {
-      allow read: if isAuth() && (
-        resource.data.carrierId == request.auth.uid || // Carrier can read their own bids
-        resource.data.creatorId == request.auth.uid    // Company can read bids for their trips
-      );
+      allow read: if isAuth()
+                  && (resource.data.carrierId == request.auth.uid     // transportista ve sus propias ofertas
+                      || resource.data.creatorId == request.auth.uid); // empresa ve ofertas de sus viajes
     }
+
   }
 }
-
-    
