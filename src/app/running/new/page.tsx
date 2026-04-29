@@ -41,7 +41,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { uploadFileToServer } from '@/lib/server-actions';
+// Removed server action import to avoid Netlify build ID mismatch issues
+// import { uploadFileToServer } from '@/lib/server-actions';
 
 const libraries: ("places")[] = ['places'];
 
@@ -63,6 +64,22 @@ const fileToDataUrl = (file: File): Promise<string> => {
         reader.onerror = reject;
         reader.readAsDataURL(file);
     });
+};
+
+const uploadFileViaAPI = async (path: string, dataUrl: string): Promise<string> => {
+    const response = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, dataUrl }),
+    });
+    
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to upload file');
+    }
+    
+    const data = await response.json();
+    return data.url;
 };
 
 const formSchema = z.object({
@@ -830,7 +847,7 @@ function CreateTripPageContent() {
         // 2. Prepare file uploads
         const photoUploadPromises = merchandisePhotos.map(async (file) => {
             const dataUrl = await fileToDataUrl(file);
-            return uploadFileToServer(`trip_photos/${user!.uid}/${tripId}/${Date.now()}_${file.name}`, dataUrl);
+            return uploadFileViaAPI(`trip_photos/${user!.uid}/${tripId}/${Date.now()}_${file.name}`, dataUrl);
         });
 
         const documentFiles = [
@@ -844,7 +861,7 @@ function CreateTripPageContent() {
             .map(async ({ file, type, visibility }) => {
                 if (!file) return null; // Should not happen due to filter
                 const dataUrl = await fileToDataUrl(file);
-                const url = await uploadFileToServer(`trip_documents/${user!.uid}/${tripId}/${Date.now()}_${file.name}`, dataUrl);
+                const url = await uploadFileViaAPI(`trip_documents/${user!.uid}/${tripId}/${Date.now()}_${file.name}`, dataUrl);
                 return {
                     name: file!.name,
                     url,
